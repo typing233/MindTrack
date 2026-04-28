@@ -23,7 +23,7 @@
         </div>
         <div class="score-display">
           <div class="score-value" :class="todayDiary.emotion_type">
-            {{ (todayDiary.emotion_score * 100).toFixed(0) }}
+            {{ getDisplayScore(todayDiary.emotion_type, todayDiary.emotion_score) }}
           </div>
           <div class="score-info">
             <div class="score-label">
@@ -31,14 +31,14 @@
                 {{ getEmotionLabel(todayDiary.emotion_type) }}
               </span>
             </div>
-            <div class="score-hint">情绪指数，越高越积极</div>
+            <div class="score-hint">{{ getScoreHint(todayDiary.emotion_type) }}</div>
           </div>
         </div>
         <div class="score-bar">
           <div 
             class="score-fill" 
             :class="todayDiary.emotion_type"
-            :style="{ width: (todayDiary.emotion_score * 100) + '%' }"
+            :style="{ width: getScoreBarWidth(todayDiary.emotion_type, todayDiary.emotion_score) }"
           ></div>
         </div>
         <div v-if="todayDiary.keywords && todayDiary.keywords.length > 0" style="margin-top: 16px;">
@@ -130,13 +130,13 @@
               <span class="emotion-badge" :class="selectedDiary.emotion_type">
                 {{ getEmotionLabel(selectedDiary.emotion_type) }}
               </span>
-              <span>{{ (selectedDiary.emotion_score * 100).toFixed(0) }}分</span>
+              <span>{{ getDisplayScore(selectedDiary.emotion_type, selectedDiary.emotion_score) }}分</span>
             </div>
             <div class="score-bar">
               <div 
                 class="score-fill" 
                 :class="selectedDiary.emotion_type"
-                :style="{ width: (selectedDiary.emotion_score * 100) + '%' }"
+                :style="{ width: getScoreBarWidth(selectedDiary.emotion_type, selectedDiary.emotion_score) }"
               ></div>
             </div>
           </div>
@@ -221,6 +221,29 @@ export default {
         neutral: '😐 平稳'
       };
       return labels[type] || type;
+    };
+
+    const getDisplayScore = (type, score) => {
+      if (type === 'negative') {
+        return Math.round((1 - score) * 100);
+      }
+      return Math.round(score * 100);
+    };
+
+    const getScoreBarWidth = (type, score) => {
+      if (type === 'negative') {
+        return Math.round((1 - score) * 100) + '%';
+      }
+      return Math.round(score * 100) + '%';
+    };
+
+    const getScoreHint = (type) => {
+      const hints = {
+        positive: '积极程度，分数越高心情越好',
+        negative: '消极程度，分数越高情绪越低落',
+        neutral: '情绪平稳，无明显倾向'
+      };
+      return hints[type] || '';
     };
 
     const loadTodayDiary = async () => {
@@ -336,6 +359,9 @@ export default {
       toast,
       showToast,
       getEmotionLabel,
+      getDisplayScore,
+      getScoreBarWidth,
+      getScoreHint,
       loadConfig,
       handleSubmit,
       showDiaryDetail

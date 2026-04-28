@@ -7,6 +7,7 @@ const {
   insertEmotion,
   insertKeywords,
   getDiaryByDate,
+  getDiaryWithEmotionByDate,
   getDiariesWithEmotions,
   getDiariesByDateRange,
   getConfig,
@@ -89,7 +90,7 @@ app.post('/api/diary', async (req, res) => {
 app.get('/api/diary/today', (req, res) => {
   try {
     const today = dayjs().format('YYYY-MM-DD');
-    const diary = getDiaryByDate.get({ date: today });
+    const diary = getDiaryWithEmotionByDate.get({ date: today });
     
     if (diary) {
       const { getKeywordsByDateRange } = require('./database');
