@@ -114,16 +114,10 @@ export default {
     };
 
     const getDisplayScore = (type, score) => {
-      if (type === 'negative') {
-        return Math.round((1 - score) * 100);
-      }
       return Math.round(score * 100);
     };
 
     const getScoreBarWidth = (type, score) => {
-      if (type === 'negative') {
-        return Math.round((1 - score) * 100) + '%';
-      }
       return Math.round(score * 100) + '%';
     };
 

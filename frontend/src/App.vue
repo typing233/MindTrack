@@ -224,26 +224,15 @@ export default {
     };
 
     const getDisplayScore = (type, score) => {
-      if (type === 'negative') {
-        return Math.round((1 - score) * 100);
-      }
       return Math.round(score * 100);
     };
 
     const getScoreBarWidth = (type, score) => {
-      if (type === 'negative') {
-        return Math.round((1 - score) * 100) + '%';
-      }
       return Math.round(score * 100) + '%';
     };
 
     const getScoreHint = (type) => {
-      const hints = {
-        positive: '积极程度，分数越高心情越好',
-        negative: '消极程度，分数越高情绪越低落',
-        neutral: '情绪平稳，无明显倾向'
-      };
-      return hints[type] || '';
+      return '心情指数，分数越高心情越好';
     };
 
     const loadTodayDiary = async () => {
