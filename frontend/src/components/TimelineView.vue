@@ -30,13 +30,13 @@
             <span class="emotion-badge" :class="diary.emotion_type">
               {{ getEmotionLabel(diary.emotion_type) }}
             </span>
-            <span>{{ (diary.emotion_score * 100).toFixed(0) }}分</span>
+            <span>{{ getDisplayScore(diary.emotion_type, diary.emotion_score) }}分</span>
           </div>
           <div class="score-bar">
             <div 
               class="score-fill" 
               :class="diary.emotion_type"
-              :style="{ width: (diary.emotion_score * 100) + '%' }"
+              :style="{ width: getScoreBarWidth(diary.emotion_type, diary.emotion_score) }"
             ></div>
           </div>
         </div>
@@ -113,12 +113,28 @@ export default {
       return labels[type] || type;
     };
 
+    const getDisplayScore = (type, score) => {
+      if (type === 'negative') {
+        return Math.round((1 - score) * 100);
+      }
+      return Math.round(score * 100);
+    };
+
+    const getScoreBarWidth = (type, score) => {
+      if (type === 'negative') {
+        return Math.round((1 - score) * 100) + '%';
+      }
+      return Math.round(score * 100) + '%';
+    };
+
     return {
       displayDiaries,
       chartData,
       formatDay,
       formatMonth,
-      getEmotionLabel
+      getEmotionLabel,
+      getDisplayScore,
+      getScoreBarWidth
     };
   }
 };

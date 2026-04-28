@@ -63,6 +63,14 @@ const getDiaryByDate = db.prepare(`
   SELECT * FROM diaries WHERE date = @date
 `);
 
+const getDiaryWithEmotionByDate = db.prepare(`
+  SELECT d.*, e.type as emotion_type, e.score as emotion_score
+  FROM diaries d
+  LEFT JOIN emotions e ON d.id = e.diary_id
+  WHERE d.date = @date
+  LIMIT 1
+`);
+
 const getDiariesWithEmotions = db.prepare(`
   SELECT d.*, e.type as emotion_type, e.score as emotion_score
   FROM diaries d
@@ -106,6 +114,7 @@ module.exports = {
   insertEmotion,
   insertKeywords,
   getDiaryByDate,
+  getDiaryWithEmotionByDate,
   getDiariesWithEmotions,
   getDiariesByDateRange,
   getKeywordsByDateRange,
