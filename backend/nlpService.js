@@ -1,5 +1,5 @@
 const axios = require('axios');
-const { getConfig, getAllConfigs } = require('./database');
+const { getConfig, getAllConfigs, getKeywordsByDateRange } = require('./database');
 const dayjs = require('dayjs');
 
 class NLPService {
@@ -208,7 +208,6 @@ class NLPService {
   }
 
   async analyzeKeywordAssociation(startDate, endDate) {
-    const { getKeywordsByDateRange } = require('./database');
     const keywords = getKeywordsByDateRange.all({ startDate, endDate });
     
     const keywordEmotionMap = {};
