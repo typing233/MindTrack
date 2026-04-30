@@ -95,7 +95,7 @@ const getKeywordsByDateRange = db.prepare(`
 `);
 
 const getConfig = db.prepare(`
-  SELECT value FROM configs WHERE key = @key
+  SELECT value, created_at FROM configs WHERE key = @key
 `);
 
 const setConfig = db.prepare(`

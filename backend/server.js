@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const dayjs = require('dayjs');
 const {
+  db,
   insertDiary,
   insertEmotion,
   insertKeywords,
@@ -10,6 +11,7 @@ const {
   getDiaryWithEmotionByDate,
   getDiariesWithEmotions,
   getDiariesByDateRange,
+  getKeywordsByDateRange,
   getConfig,
   setConfig,
   getAllConfigs
@@ -93,7 +95,6 @@ app.get('/api/diary/today', (req, res) => {
     const diary = getDiaryWithEmotionByDate.get({ date: today });
     
     if (diary) {
-      const { getKeywordsByDateRange } = require('./database');
       const keywords = getKeywordsByDateRange.all({ 
         startDate: today, 
         endDate: today 
@@ -229,7 +230,6 @@ app.put('/api/config', (req, res) => {
 
 app.get('/api/stats', (req, res) => {
   try {
-    const { db } = require('./database');
     
     const totalDiaries = db.prepare('SELECT COUNT(*) as count FROM diaries').get().count;
     const emotionCounts = db.prepare(`

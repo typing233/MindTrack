@@ -13,7 +13,7 @@
       <DiaryInput 
         :todayDiary="todayDiary"
         :todayExists="todayExists"
-        @submitting="submitting"
+        :submitting="submitting"
         @submit="handleSubmit"
       />
 
@@ -290,6 +290,7 @@ export default {
     };
 
     const loadConfig = async () => {
+      await loadStats();
     };
 
     const handleSubmit = async (content) => {

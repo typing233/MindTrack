@@ -94,6 +94,12 @@ export default {
       emit('submit', content.value.trim());
     };
 
+    watch(() => props.todayExists, (exists) => {
+      if (exists) {
+        content.value = '';
+      }
+    });
+
     return {
       content,
       textareaRef,

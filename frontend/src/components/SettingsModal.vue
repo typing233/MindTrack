@@ -55,6 +55,9 @@
       </div>
       
       <div class="modal-footer">
+        <div v-if="saveError" style="color: var(--negative-color); font-size: 13px; flex: 1;">
+          {{ saveError }}
+        </div>
         <button class="btn btn-secondary" @click="$emit('close')">取消</button>
         <button class="btn btn-primary" @click="handleSave" :disabled="saving">
           {{ saving ? '保存中...' : '保存设置' }}
@@ -78,6 +81,7 @@ export default {
       openai_model: ''
     });
     const saving = ref(false);
+    const saveError = ref('');
 
     const loadConfig = async () => {
       try {
@@ -96,12 +100,14 @@ export default {
 
     const handleSave = async () => {
       saving.value = true;
+      saveError.value = '';
       try {
         await configApi.update(form.value);
         emit('saved');
         emit('close');
       } catch (error) {
         console.error('保存配置失败:', error);
+        saveError.value = error.response?.data?.error || '保存失败，请稍后重试';
       } finally {
         saving.value = false;
       }
@@ -114,6 +120,7 @@ export default {
     return {
       form,
       saving,
+      saveError,
       handleSave
     };
   }
