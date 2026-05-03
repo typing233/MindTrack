@@ -10,7 +10,8 @@
   "dependencies": {
     "vue": "^3.4.0",
     "axios": "^1.6.2",
-    "dayjs": "^1.11.10"
+    "dayjs": "^1.11.10",
+    "three": "^0.160.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.0",

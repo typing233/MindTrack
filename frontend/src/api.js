@@ -22,6 +22,18 @@ export const diaryApi = {
     if (endDate) params.endDate = endDate;
     const response = await api.get('/diaries', { params });
     return response.data;
+  },
+  
+  updateAccess: async (id) => {
+    const response = await api.put(`/diary/${id}/access`);
+    return response.data;
+  }
+};
+
+export const searchApi = {
+  findSimilar: async (content, limit = 5, excludeId = null) => {
+    const response = await api.post('/search/similar', { content, limit, excludeId });
+    return response.data;
   }
 };
 
@@ -33,6 +45,16 @@ export const configApi = {
   
   update: async (configs) => {
     const response = await api.put('/config', configs);
+    return response.data;
+  },
+  
+  testConnection: async () => {
+    const response = await api.post('/test-connection');
+    return response.data;
+  },
+  
+  testEmbedding: async () => {
+    const response = await api.post('/test-embedding');
     return response.data;
   }
 };

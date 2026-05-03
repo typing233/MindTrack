@@ -246,6 +246,116 @@ class NLPService {
     if (negative >= positive && negative >= neutral) return 'negative';
     return 'neutral';
   }
+
+  async generateEmbedding(text) {
+    const config = await this.getConfig();
+    
+    if (!config.openai_api_key || !config.openai_base_url || !config.openai_model) {
+      return this.fallbackEmbeddingGeneration(text);
+    }
+
+    try {
+      const embeddingModel = config.openai_embedding_model || 'text-embedding-3-small';
+      
+      const response = await axios.post(
+        `${config.openai_base_url}/v1/embeddings`,
+        {
+          model: embeddingModel,
+          input: text,
+          encoding_format: 'float'
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${config.openai_api_key}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 30000
+        }
+      );
+
+      if (response.data && response.data.data && response.data.data[0]) {
+        return response.data.data[0].embedding;
+      }
+      
+      return this.fallbackEmbeddingGeneration(text);
+    } catch (error) {
+      console.error('Embedding API调用失败:', error.message);
+      return this.fallbackEmbeddingGeneration(text);
+    }
+  }
+
+  fallbackEmbeddingGeneration(text) {
+    const stopWords = ['的', '了', '是', '在', '我', '有', '和', '就', '不', '人', '都', '一', '一个', '上', '也', '很', '到', '说', '要', '去', '你', '会', '着', '没有', '看', '好', '自己', '这', '那', '她', '他', '它', '们', '这个', '那个', '什么', '怎么', '为什么', '哪', '谁', '多少', '几', '啊', '吧', '呢', '吗', '呀', '哦', '嗯', '哈'];
+    
+    const wordFreq = {};
+    const totalChars = text.length;
+    
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+      if (stopWords.includes(char)) continue;
+      
+      wordFreq[char] = (wordFreq[char] || 0) + 1;
+      
+      if (i < text.length - 1) {
+        const bigram = text.substring(i, i + 2);
+        if (!stopWords.some(sw => bigram.includes(sw))) {
+          wordFreq[bigram] = (wordFreq[bigram] || 0) + 1;
+        }
+      }
+    }
+    
+    const sortedWords = Object.entries(wordFreq)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 50)
+      .map(entry => entry[0]);
+    
+    const embedding = [];
+    const vecSize = 128;
+    
+    for (let i = 0; i < vecSize; i++) {
+      let value = 0;
+      
+      if (i < sortedWords.length) {
+        const word = sortedWords[i];
+        const freq = wordFreq[word];
+        value = freq / Math.max(1, text.length);
+      }
+      
+      for (let j = 0; j < text.length; j++) {
+        const char = text.charCodeAt(j);
+        const seed = (char * (j + 1) * (i + 1)) % 1000;
+        const noise = (seed / 1000 - 0.5) * 0.01;
+        value += noise;
+      }
+      
+      value = Math.tanh(value);
+      embedding.push(value);
+    }
+    
+    const magnitude = Math.sqrt(embedding.reduce((sum, val) => sum + val * val, 0));
+    const normalized = embedding.map(val => val / (magnitude || 1));
+    
+    return normalized;
+  }
+
+  cosineSimilarity(vecA, vecB) {
+    if (!vecA || !vecB || vecA.length !== vecB.length) {
+      return 0;
+    }
+    
+    let dotProduct = 0;
+    let magA = 0;
+    let magB = 0;
+    
+    for (let i = 0; i < vecA.length; i++) {
+      dotProduct += vecA[i] * vecB[i];
+      magA += vecA[i] * vecA[i];
+      magB += vecB[i] * vecB[i];
+    }
+    
+    const magnitude = Math.sqrt(magA) * Math.sqrt(magB);
+    return magnitude === 0 ? 0 : dotProduct / magnitude;
+  }
 }
 
 module.exports = new NLPService();

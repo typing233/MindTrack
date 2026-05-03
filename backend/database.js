@@ -10,7 +10,9 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     content TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    date TEXT NOT NULL
+    date TEXT NOT NULL,
+    embedding TEXT,
+    last_accessed TEXT
   );
 
   CREATE TABLE IF NOT EXISTS emotions (
@@ -38,9 +40,31 @@ db.exec(`
   );
 `);
 
+const addEmbeddingColumn = db.prepare(`
+  ALTER TABLE diaries ADD COLUMN embedding TEXT
+`);
+try {
+  addEmbeddingColumn.run();
+} catch (e) {
+  if (!e.message.includes('duplicate column name')) {
+    throw e;
+  }
+}
+
+const addLastAccessedColumn = db.prepare(`
+  ALTER TABLE diaries ADD COLUMN last_accessed TEXT
+`);
+try {
+  addLastAccessedColumn.run();
+} catch (e) {
+  if (!e.message.includes('duplicate column name')) {
+    throw e;
+  }
+}
+
 const insertDiary = db.prepare(`
-  INSERT INTO diaries (content, created_at, date)
-  VALUES (@content, @created_at, @date)
+  INSERT INTO diaries (content, created_at, date, embedding, last_accessed)
+  VALUES (@content, @created_at, @date, @embedding, @last_accessed)
 `);
 
 const insertEmotion = db.prepare(`
@@ -58,6 +82,35 @@ const insertKeywords = db.transaction((diaryId, keywords) => {
     insert.run({ diary_id: diaryId, keyword, created_at: now });
   }
 });
+
+const updateDiaryEmbedding = db.prepare(`
+  UPDATE diaries
+  SET embedding = @embedding
+  WHERE id = @id
+`);
+
+const updateDiaryLastAccessed = db.prepare(`
+  UPDATE diaries
+  SET last_accessed = @last_accessed
+  WHERE id = @id
+`);
+
+const getDiaryById = db.prepare(`
+  SELECT d.*, e.type as emotion_type, e.score as emotion_score
+  FROM diaries d
+  LEFT JOIN emotions e ON d.id = e.diary_id
+  WHERE d.id = @id
+  LIMIT 1
+`);
+
+const getAllDiariesWithEmbeddings = db.prepare(`
+  SELECT d.id, d.content, d.date, d.created_at, d.last_accessed, d.embedding,
+         e.type as emotion_type, e.score as emotion_score
+  FROM diaries d
+  LEFT JOIN emotions e ON d.id = e.diary_id
+  WHERE d.embedding IS NOT NULL
+  ORDER BY d.created_at DESC
+`);
 
 const getDiaryByDate = db.prepare(`
   SELECT * FROM diaries WHERE date = @date
@@ -113,11 +166,15 @@ module.exports = {
   insertDiary,
   insertEmotion,
   insertKeywords,
+  updateDiaryEmbedding,
+  updateDiaryLastAccessed,
+  getDiaryById,
   getDiaryByDate,
   getDiaryWithEmotionByDate,
   getDiariesWithEmotions,
   getDiariesByDateRange,
   getKeywordsByDateRange,
+  getAllDiariesWithEmbeddings,
   getConfig,
   setConfig,
   getAllConfigs
