@@ -15,6 +15,7 @@
         :todayExists="todayExists"
         :submitting="submitting"
         @submit="handleSubmit"
+        @showNote="showDiaryDetail"
       />
 
       <div v-if="todayExists && todayDiary" class="card">
@@ -78,6 +79,13 @@
       <div class="tabs">
         <button 
           class="tab" 
+          :class="{ active: activeTab === 'space' }"
+          @click="activeTab = 'space'"
+        >
+          🌌 星云视图
+        </button>
+        <button 
+          class="tab" 
           :class="{ active: activeTab === 'calendar' }"
           @click="activeTab = 'calendar'"
         >
@@ -99,6 +107,12 @@
           🔍 关键词分析
         </button>
       </div>
+
+      <SpaceView 
+        v-if="activeTab === 'space'"
+        :diaries="diaries"
+        @review="handleReviewDiary"
+      />
 
       <CalendarView 
         v-if="activeTab === 'calendar'"
@@ -142,6 +156,7 @@
           </div>
           <div class="modal-footer">
             <button class="btn btn-secondary" @click="selectedDiary = null">关闭</button>
+            <button class="btn btn-primary" @click="markAsReviewed">标记为已回顾</button>
           </div>
         </div>
       </div>
@@ -164,6 +179,7 @@ import { ref, onMounted, watch } from 'vue';
 import dayjs from 'dayjs';
 import { diaryApi, statsApi, analysisApi } from './api';
 import DiaryInput from './components/DiaryInput.vue';
+import SpaceView from './components/SpaceView.vue';
 import CalendarView from './components/CalendarView.vue';
 import TimelineView from './components/TimelineView.vue';
 import KeywordAnalysisView from './components/KeywordAnalysisView.vue';
@@ -173,6 +189,7 @@ export default {
   name: 'App',
   components: {
     DiaryInput,
+    SpaceView,
     CalendarView,
     TimelineView,
     KeywordAnalysisView,
@@ -182,7 +199,7 @@ export default {
     const todayDiary = ref(null);
     const todayExists = ref(false);
     const submitting = ref(false);
-    const activeTab = ref('calendar');
+    const activeTab = ref('space');
     const diaries = ref([]);
     const selectedDiary = ref(null);
     const showSettings = ref(false);
@@ -319,6 +336,32 @@ export default {
 
     const showDiaryDetail = (diary) => {
       selectedDiary.value = diary;
+      
+      if (diary && diary.id) {
+        diaryApi.updateAccess(diary.id).catch(err => {
+          console.error('更新访问时间失败:', err);
+        });
+      }
+    };
+
+    const handleReviewDiary = async (diaryId) => {
+      try {
+        const result = await diaryApi.updateAccess(diaryId);
+        if (result.success) {
+          showToast('已标记为已回顾！', 'success');
+          await loadDiaries();
+        }
+      } catch (error) {
+        console.error('更新回顾状态失败:', error);
+        showToast('更新失败，请稍后重试', 'error');
+      }
+    };
+
+    const markAsReviewed = async () => {
+      if (selectedDiary.value && selectedDiary.value.id) {
+        await handleReviewDiary(selectedDiary.value.id);
+        selectedDiary.value = null;
+      }
     };
 
     watch(activeTab, (newTab) => {
@@ -354,7 +397,9 @@ export default {
       getScoreHint,
       loadConfig,
       handleSubmit,
-      showDiaryDetail
+      showDiaryDetail,
+      handleReviewDiary,
+      markAsReviewed
     };
   }
 };
