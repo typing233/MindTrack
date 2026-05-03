@@ -40,26 +40,17 @@ db.exec(`
   );
 `);
 
-const addEmbeddingColumn = db.prepare(`
-  ALTER TABLE diaries ADD COLUMN embedding TEXT
-`);
-try {
-  addEmbeddingColumn.run();
-} catch (e) {
-  if (!e.message.includes('duplicate column name')) {
-    throw e;
-  }
+const checkColumnExists = (tableName, columnName) => {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all();
+  return columns.some(col => col.name === columnName);
+};
+
+if (!checkColumnExists('diaries', 'embedding')) {
+  db.exec(`ALTER TABLE diaries ADD COLUMN embedding TEXT`);
 }
 
-const addLastAccessedColumn = db.prepare(`
-  ALTER TABLE diaries ADD COLUMN last_accessed TEXT
-`);
-try {
-  addLastAccessedColumn.run();
-} catch (e) {
-  if (!e.message.includes('duplicate column name')) {
-    throw e;
-  }
+if (!checkColumnExists('diaries', 'last_accessed')) {
+  db.exec(`ALTER TABLE diaries ADD COLUMN last_accessed TEXT`);
 }
 
 const insertDiary = db.prepare(`

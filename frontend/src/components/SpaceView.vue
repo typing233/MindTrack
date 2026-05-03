@@ -9,6 +9,9 @@
         <button class="control-btn" @click="toggleAutoRotate" :class="{ active: autoRotate }" title="自动旋转">
           🎡 {{ autoRotate ? '停止旋转' : '自动旋转' }}
         </button>
+        <button class="control-btn" @click="reclustering" title="重新聚类">
+          🔀 重新聚类
+        </button>
       </div>
       <div class="control-group">
         <label class="control-label">
@@ -19,6 +22,7 @@
         </label>
       </div>
     </div>
+    
     <div v-if="selectedNode" class="node-detail-panel">
       <div class="node-detail-header">
         <span class="node-detail-date">{{ selectedNode.date }}</span>
@@ -35,11 +39,32 @@
         <div v-if="selectedNode.keywords && selectedNode.keywords.length > 0" class="node-detail-keywords">
           <span v-for="kw in selectedNode.keywords" :key="kw" class="keyword-tag">{{ kw }}</span>
         </div>
+        
+        <div v-if="similarToSelected.length > 0" class="similar-notes-section">
+          <div class="similar-notes-header">📝 相似笔记</div>
+          <div class="similar-notes-list">
+            <div 
+              v-for="note in similarToSelected" 
+              :key="note.id" 
+              class="similar-note-item"
+              @click="jumpToNode(note.id)"
+            >
+              <div class="similar-note-preview">{{ note.content.substring(0, 30) }}...</div>
+              <div class="similar-note-info">
+                <span class="similar-note-date">{{ note.date }}</span>
+                <span class="similarity-badge" :class="getSimilarityClass(note.similarityPercent)">
+                  {{ note.similarityPercent }}%
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
       <div class="node-detail-footer">
         <button class="btn btn-primary" @click="reviewNode">标记为已回顾</button>
       </div>
     </div>
+    
     <div class="space-legend">
       <div class="legend-item">
         <span class="legend-dot positive"></span> 积极情绪
@@ -62,7 +87,7 @@
 </template>
 
 <script>
-import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue';
+import { ref, onMounted, onUnmounted, watch, nextTick, computed } from 'vue';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import dayjs from 'dayjs';
@@ -82,9 +107,9 @@ export default {
     const autoRotate = ref(false);
     const showConnections = ref(true);
     const showLabels = ref(true);
+    const similarToSelected = ref([]);
 
     let scene, camera, renderer, controls;
-    let nodes = [];
     let nodeMeshes = [];
     let connectionLines = [];
     let labelSprites = [];
@@ -92,6 +117,8 @@ export default {
     let isDragging = false;
     let draggedNode = null;
     let animationFrameId = null;
+    let physicsEnabled = true;
+    let diaryEmbeddings = {};
 
     const getEmotionLabel = (type) => {
       const labels = {
@@ -110,7 +137,7 @@ export default {
       const colors = {
         positive: new THREE.Color(0x10b981),
         negative: new THREE.Color(0xef4444),
-        neutral: new THREE.Color(0x6b7280)
+        neutral: new THREE.Color(0x6366f1)
       };
       return colors[type] || colors.neutral;
     };
@@ -120,12 +147,213 @@ export default {
       const lastAccessed = diary.last_accessed ? dayjs(diary.last_accessed) : dayjs(diary.created_at);
       const daysDiff = now.diff(lastAccessed, 'day');
       
-      const minBrightness = 0.2;
+      const minBrightness = 0.25;
       const maxBrightness = 1.0;
       const maxDays = 30;
       
       const factor = maxBrightness - (Math.min(daysDiff, maxDays) / maxDays) * (maxBrightness - minBrightness);
       return Math.max(factor, minBrightness);
+    };
+
+    const getSimilarityClass = (percent) => {
+      if (percent >= 70) return 'high';
+      if (percent >= 40) return 'medium';
+      return 'low';
+    };
+
+    const parseEmbedding = (embeddingStr) => {
+      if (!embeddingStr) return null;
+      try {
+        return JSON.parse(embeddingStr);
+      } catch (e) {
+        return fallbackEmbedding(embeddingStr);
+      }
+    };
+
+    const fallbackEmbedding = (text) => {
+      const vecSize = 64;
+      const embedding = new Array(vecSize).fill(0);
+      
+      for (let i = 0; i < text.length; i++) {
+        const charCode = text.charCodeAt(i);
+        for (let j = 0; j < vecSize; j++) {
+          const seed = (charCode * (i + 1) * (j + 1)) % 1000;
+          embedding[j] += Math.sin(seed / 100) * 0.01;
+        }
+      }
+      
+      const magnitude = Math.sqrt(embedding.reduce((sum, v) => sum + v * v, 0));
+      return magnitude > 0 ? embedding.map(v => v / magnitude) : embedding;
+    };
+
+    const cosineSimilarity = (vecA, vecB) => {
+      if (!vecA || !vecB || vecA.length !== vecB.length) return 0;
+      
+      let dotProduct = 0;
+      let magA = 0;
+      let magB = 0;
+      
+      for (let i = 0; i < vecA.length; i++) {
+        dotProduct += vecA[i] * vecB[i];
+        magA += vecA[i] * vecA[i];
+        magB += vecB[i] * vecB[i];
+      }
+      
+      const magnitude = Math.sqrt(magA) * Math.sqrt(magB);
+      return magnitude === 0 ? 0 : Math.max(0, Math.min(1, (dotProduct / magnitude + 1) / 2));
+    };
+
+    const buildSimilarityMatrix = (diaries) => {
+      const matrix = {};
+      const embeddings = {};
+      
+      diaries.forEach(diary => {
+        if (diary.embedding) {
+          embeddings[diary.id] = parseEmbedding(diary.embedding);
+        } else {
+          embeddings[diary.id] = fallbackEmbedding(diary.content || '');
+        }
+        matrix[diary.id] = {};
+      });
+      
+      diaries.forEach(d1 => {
+        diaries.forEach(d2 => {
+          if (d1.id === d2.id) {
+            matrix[d1.id][d2.id] = 1;
+          } else {
+            matrix[d1.id][d2.id] = cosineSimilarity(embeddings[d1.id], embeddings[d2.id]);
+          }
+        });
+      });
+      
+      return { matrix, embeddings };
+    };
+
+    const kMeansClustering = (diaries, similarityMatrix, k = 3) => {
+      if (diaries.length <= k) {
+        return diaries.map((d, i) => ({ ...d, cluster: i }));
+      }
+      
+      const shuffled = [...diaries].sort(() => Math.random() - 0.5);
+      let centroids = shuffled.slice(0, k).map(d => d.id);
+      let assignments = {};
+      
+      for (let iteration = 0; iteration < 20; iteration++) {
+        const newAssignments = {};
+        
+        diaries.forEach(diary => {
+          let bestCluster = 0;
+          let bestSimilarity = -1;
+          
+          centroids.forEach((centroidId, clusterIdx) => {
+            const sim = similarityMatrix[diary.id][centroidId];
+            if (sim > bestSimilarity) {
+              bestSimilarity = sim;
+              bestCluster = clusterIdx;
+            }
+          });
+          
+          newAssignments[diary.id] = bestCluster;
+        });
+        
+        let changed = false;
+        for (const id of Object.keys(newAssignments)) {
+          if (assignments[id] !== newAssignments[id]) {
+            changed = true;
+            break;
+          }
+        }
+        
+        assignments = newAssignments;
+        
+        if (!changed) break;
+        
+        const clusters = Array.from({ length: k }, () => []);
+        diaries.forEach(d => clusters[assignments[d.id]].push(d));
+        
+        centroids = clusters.map(cluster => {
+          if (cluster.length === 0) return centroids[0];
+          
+          let bestId = cluster[0].id;
+          let bestAvgSim = -1;
+          
+          cluster.forEach(d1 => {
+            let totalSim = 0;
+            cluster.forEach(d2 => {
+              totalSim += similarityMatrix[d1.id][d2.id];
+            });
+            const avgSim = totalSim / cluster.length;
+            if (avgSim > bestAvgSim) {
+              bestAvgSim = avgSim;
+              bestId = d1.id;
+            }
+          });
+          
+          return bestId;
+        });
+      }
+      
+      return diaries.map(d => ({
+        ...d,
+        cluster: assignments[d.id] || 0
+      }));
+    };
+
+    const generateInitialPositions = (clusteredDiaries) => {
+      const clusterCount = Math.max(...clusteredDiaries.map(d => d.cluster)) + 1;
+      const clusterCenters = [];
+      
+      const angleStep = (Math.PI * 2) / Math.max(clusterCount, 1);
+      const radius = 12;
+      
+      for (let i = 0; i < clusterCount; i++) {
+        const angle = angleStep * i - Math.PI / 2;
+        clusterCenters.push(new THREE.Vector3(
+          Math.cos(angle) * radius,
+          Math.sin(angle) * radius * 0.6,
+          (Math.random() - 0.5) * 4
+        ));
+      }
+      
+      const positions = [];
+      const clusterSizes = {};
+      clusteredDiaries.forEach(d => {
+        clusterSizes[d.cluster] = (clusterSizes[d.cluster] || 0) + 1;
+      });
+      
+      const clusterIndices = {};
+      clusteredDiaries.forEach(diary => {
+        const cluster = diary.cluster;
+        const idx = clusterIndices[cluster] || 0;
+        clusterIndices[cluster] = idx + 1;
+        
+        const center = clusterCenters[cluster] || new THREE.Vector3();
+        const size = clusterSizes[cluster] || 1;
+        const clusterRadius = Math.max(2, Math.sqrt(size) * 1.5);
+        
+        const phi = Math.acos(-1 + (2 * idx) / Math.max(1, size));
+        const theta = Math.sqrt(Math.max(1, size) * Math.PI) * phi;
+        
+        const offset = new THREE.Vector3(
+          Math.cos(theta) * Math.sin(phi) * clusterRadius,
+          Math.sin(theta) * Math.sin(phi) * clusterRadius,
+          Math.cos(phi) * clusterRadius
+        );
+        
+        const randomOffset = new THREE.Vector3(
+          (Math.random() - 0.5) * 1,
+          (Math.random() - 0.5) * 1,
+          (Math.random() - 0.5) * 1
+        );
+        
+        positions.push({
+          diary,
+          position: center.clone().add(offset).add(randomOffset),
+          velocity: new THREE.Vector3()
+        });
+      });
+      
+      return positions;
     };
 
     const createNodeMesh = (diary, position) => {
@@ -134,11 +362,12 @@ export default {
       
       const adjustedColor = color.clone().multiplyScalar(brightness);
       
-      const geometry = new THREE.SphereGeometry(0.8, 32, 32);
+      const size = 0.5 + (diary.content?.length || 0) / 500;
+      const geometry = new THREE.SphereGeometry(Math.min(size, 1.2), 24, 24);
       const material = new THREE.MeshPhongMaterial({
         color: adjustedColor,
-        emissive: adjustedColor.clone().multiplyScalar(0.3),
-        shininess: 100,
+        emissive: adjustedColor.clone().multiplyScalar(0.2),
+        shininess: 80,
         transparent: true,
         opacity: 0.9
       });
@@ -146,19 +375,30 @@ export default {
       const sphere = new THREE.Mesh(geometry, material);
       sphere.position.copy(position);
       sphere.userData = { 
-        diary, 
-        originalPosition: position.clone(),
-        targetPosition: position.clone(),
-        velocity: new THREE.Vector3()
+        diaryId: diary.id,
+        diary,
+        velocity: new THREE.Vector3(),
+        acceleration: new THREE.Vector3(),
+        cluster: diary.cluster
       };
       
-      const glowGeometry = new THREE.SphereGeometry(1.2, 32, 32);
+      const ringGeometry = new THREE.RingGeometry(1.0, 1.3, 32);
+      const ringMaterial = new THREE.MeshBasicMaterial({
+        color: adjustedColor,
+        transparent: true,
+        opacity: 0.15,
+        side: THREE.DoubleSide
+      });
+      const ring = new THREE.Mesh(ringGeometry, ringMaterial);
+      ring.rotation.x = Math.PI / 2;
+      sphere.add(ring);
+      
+      const glowGeometry = new THREE.SphereGeometry(1.5, 32, 32);
       const glowMaterial = new THREE.MeshBasicMaterial({
         color: adjustedColor,
         transparent: true,
-        opacity: 0.1 * brightness
+        opacity: 0.05 * brightness
       });
-      
       const glow = new THREE.Mesh(glowGeometry, glowMaterial);
       sphere.add(glow);
       
@@ -171,7 +411,7 @@ export default {
       canvas.width = 256;
       canvas.height = 64;
       
-      context.fillStyle = 'rgba(0, 0, 0, 0.7)';
+      context.fillStyle = 'rgba(0, 0, 0, 0.8)';
       context.beginPath();
       context.roundRect(0, 0, 256, 64, 8);
       context.fill();
@@ -183,8 +423,8 @@ export default {
       
       context.font = '10px Arial';
       context.fillStyle = 'rgba(255, 255, 255, 0.7)';
-      const preview = diary.content.length > 15 ? diary.content.substring(0, 15) + '...' : diary.content;
-      context.fillText(preview, 128, 36);
+      const preview = diary.content?.length > 20 ? diary.content.substring(0, 20) + '...' : diary.content;
+      context.fillText(preview || '', 128, 36);
       
       const texture = new THREE.CanvasTexture(canvas);
       const material = new THREE.SpriteMaterial({ 
@@ -195,108 +435,207 @@ export default {
       
       const sprite = new THREE.Sprite(material);
       sprite.position.copy(position);
-      sprite.position.y += 1.5;
-      sprite.scale.set(2, 0.5, 1);
-      sprite.userData = { originalOpacity: 0.1, visible: false };
+      sprite.position.y += 1.8;
+      sprite.scale.set(2.5, 0.6, 1);
+      sprite.userData = { diaryId: diary.id };
       
       return sprite;
     };
 
-    const createConnectionLines = (nodePositions) => {
+    const createConnectionLines = (meshes, similarityMatrix, similarityThreshold = 0.5) => {
       const lines = [];
       
-      if (nodePositions.length < 2) return lines;
-      
-      const positionsByEmotion = {
-        positive: [],
-        negative: [],
-        neutral: []
-      };
-      
-      nodePositions.forEach((item) => {
-        if (item.diary.emotion_type) {
-          positionsByEmotion[item.diary.emotion_type].push(item);
+      for (let i = 0; i < meshes.length; i++) {
+        for (let j = i + 1; j < meshes.length; j++) {
+          const mesh1 = meshes[i];
+          const mesh2 = meshes[j];
+          
+          const id1 = mesh1.userData.diaryId;
+          const id2 = mesh2.userData.diaryId;
+          
+          const similarity = similarityMatrix[id1]?.[id2] || 0;
+          
+          if (similarity >= similarityThreshold) {
+            const points = [
+              mesh1.position.clone(),
+              mesh2.position.clone()
+            ];
+            
+            const geometry = new THREE.BufferGeometry().setFromPoints(points);
+            
+            const lineColor = new THREE.Color();
+            const diary1 = mesh1.userData.diary;
+            const diary2 = mesh2.userData.diary;
+            
+            if (diary1.cluster === diary2.cluster) {
+              lineColor.copy(getEmotionColor(diary1.emotion_type));
+            } else {
+              lineColor.set(0x6366f1);
+            }
+            
+            const material = new THREE.LineBasicMaterial({
+              color: lineColor,
+              transparent: true,
+              opacity: similarity * 0.4
+            });
+            
+            const line = new THREE.Line(geometry, material);
+            line.userData = { id1, id2, similarity };
+            lines.push(line);
+          }
         }
-      });
-      
-      const center = new THREE.Vector3(0, 0, 0);
-      
-      for (const [emotion, items] of Object.entries(positionsByEmotion)) {
-        if (items.length < 2) continue;
-        
-        const groupCenter = new THREE.Vector3();
-        items.forEach(item => groupCenter.add(item.position));
-        groupCenter.divideScalar(items.length);
-        
-        items.forEach(item => {
-          const geometry = new THREE.BufferGeometry().setFromPoints([
-            item.position.clone(),
-            groupCenter.clone()
-          ]);
-          
-          const color = getEmotionColor(emotion);
-          const material = new THREE.LineBasicMaterial({ 
-            color: color,
-            transparent: true,
-            opacity: 0.15
-          });
-          
-          const line = new THREE.Line(geometry, material);
-          line.userData = { emotion };
-          lines.push(line);
-        });
       }
       
       return lines;
     };
 
-    const generatePositions = (diaries) => {
-      const positions = [];
-      const count = diaries.length;
+    const updatePhysics = (meshes, similarityMatrix, deltaTime) => {
+      if (!physicsEnabled) return;
       
-      const groups = {
-        positive: [],
-        negative: [],
-        neutral: []
-      };
+      const dt = Math.min(deltaTime, 0.033);
+      const damping = 0.95;
+      const similarityForce = 0.5;
+      const repulsionForce = 2.0;
+      const centerAttraction = 0.02;
       
-      diaries.forEach((diary) => {
-        const emotion = diary.emotion_type || 'neutral';
-        groups[emotion].push(diary);
+      for (let i = 0; i < meshes.length; i++) {
+        const mesh1 = meshes[i];
+        const force = new THREE.Vector3();
+        
+        const toCenter = new THREE.Vector3(0, 0, 0).sub(mesh1.position);
+        force.add(toCenter.multiplyScalar(centerAttraction));
+        
+        for (let j = 0; j < meshes.length; j++) {
+          if (i === j) continue;
+          
+          const mesh2 = meshes[j];
+          const diff = mesh2.position.clone().sub(mesh1.position);
+          const distance = diff.length();
+          
+          if (distance < 0.1) continue;
+          
+          const id1 = mesh1.userData.diaryId;
+          const id2 = mesh2.userData.diaryId;
+          const similarity = similarityMatrix[id1]?.[id2] || 0.3;
+          
+          const minDistance = 1.5 + similarity * 1.5;
+          
+          if (distance < minDistance) {
+            const repulsion = diff.clone().normalize().multiplyScalar(
+              -repulsionForce * (1 - distance / minDistance)
+            );
+            force.add(repulsion);
+          }
+          
+          if (similarity > 0.3 && distance > minDistance) {
+            const attraction = diff.clone().normalize().multiplyScalar(
+              similarityForce * similarity * Math.min(1, (distance - minDistance) / 10)
+            );
+            force.add(attraction);
+          }
+        }
+        
+        mesh1.userData.velocity.add(force.multiplyScalar(dt));
+        mesh1.userData.velocity.multiplyScalar(damping);
+        mesh1.position.add(mesh1.userData.velocity.clone().multiplyScalar(dt));
+      }
+    };
+
+    const updateConnectionLines = () => {
+      connectionLines.forEach(line => {
+        const { id1, id2 } = line.userData;
+        const mesh1 = nodeMeshes.find(m => m.userData.diaryId === id1);
+        const mesh2 = nodeMeshes.find(m => m.userData.diaryId === id2);
+        
+        if (mesh1 && mesh2) {
+          const positions = new Float32Array([
+            mesh1.position.x, mesh1.position.y, mesh1.position.z,
+            mesh2.position.x, mesh2.position.y, mesh2.position.z
+          ]);
+          line.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+          line.geometry.attributes.position.needsUpdate = true;
+        }
+      });
+    };
+
+    const updateLabels = () => {
+      labelSprites.forEach(label => {
+        const mesh = nodeMeshes.find(m => m.userData.diaryId === label.userData.diaryId);
+        if (mesh) {
+          label.position.copy(mesh.position);
+          label.position.y += 1.8;
+        }
+      });
+    };
+
+    const findSimilarNotes = (diaryId, limit = 5) => {
+      if (!diaryId) return [];
+      
+      const results = [];
+      const currentDiary = props.diaries.find(d => d.id === diaryId);
+      if (!currentDiary) return [];
+      
+      const currentEmbedding = currentDiary.embedding 
+        ? parseEmbedding(currentDiary.embedding)
+        : fallbackEmbedding(currentDiary.content);
+      
+      props.diaries.forEach(diary => {
+        if (diary.id === diaryId) return;
+        
+        const embedding = diary.embedding 
+          ? parseEmbedding(diary.embedding)
+          : fallbackEmbedding(diary.content);
+        
+        const similarity = cosineSimilarity(currentEmbedding, embedding);
+        const similarityPercent = Math.round(similarity * 100);
+        
+        if (similarityPercent >= 30) {
+          results.push({
+            ...diary,
+            similarityPercent
+          });
+        }
       });
       
-      const groupCenters = {
-        positive: new THREE.Vector3(-8, 0, 0),
-        negative: new THREE.Vector3(8, 0, 0),
-        neutral: new THREE.Vector3(0, 5, 0)
+      return results.sort((a, b) => b.similarityPercent - a.similarityPercent).slice(0, limit);
+    };
+
+    const jumpToNode = (diaryId) => {
+      const mesh = nodeMeshes.find(m => m.userData.diaryId === diaryId);
+      if (!mesh) return;
+      
+      const targetPosition = mesh.position.clone();
+      const offset = new THREE.Vector3(5, 3, 5);
+      const cameraTarget = targetPosition.clone().add(offset);
+      
+      const startPosition = camera.position.clone();
+      const startLookAt = new THREE.Vector3();
+      controls.target.clone(startLookAt);
+      
+      let progress = 0;
+      const animateCamera = () => {
+        progress += 0.03;
+        if (progress >= 1) {
+          camera.position.copy(targetPosition.clone().add(offset));
+          controls.target.copy(targetPosition);
+          return;
+        }
+        
+        const t = progress;
+        camera.position.lerpVectors(startPosition, cameraTarget, t);
+        controls.target.lerpVectors(startLookAt, targetPosition, t);
+        controls.update();
+        
+        requestAnimationFrame(animateCamera);
       };
       
-      for (const [emotion, group] of Object.entries(groups)) {
-        const center = groupCenters[emotion];
-        const radius = Math.max(1.5, Math.sqrt(group.length) * 1.5);
-        
-        group.forEach((diary, index) => {
-          const phi = Math.acos(-1 + (2 * index) / Math.max(1, group.length));
-          const theta = Math.sqrt(Math.max(1, group.length) * Math.PI) * phi;
-          
-          const x = center.x + radius * Math.cos(theta) * Math.sin(phi);
-          const y = center.y + radius * Math.sin(theta) * Math.sin(phi);
-          const z = center.z + radius * Math.cos(phi);
-          
-          const noise = new THREE.Vector3(
-            (Math.random() - 0.5) * 2,
-            (Math.random() - 0.5) * 2,
-            (Math.random() - 0.5) * 2
-          );
-          
-          positions.push({
-            diary,
-            position: new THREE.Vector3(x, y, z).add(noise)
-          });
-        });
-      }
+      animateCamera();
       
-      return positions;
+      const diary = props.diaries.find(d => d.id === diaryId);
+      if (diary) {
+        selectedNode.value = { ...diary };
+        similarToSelected.value = findSimilarNotes(diaryId);
+      }
     };
 
     const initScene = () => {
@@ -310,7 +649,7 @@ export default {
       const height = container.clientHeight;
       
       camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 1000);
-      camera.position.set(0, 0, 30);
+      camera.position.set(0, 0, 35);
       
       renderer = new THREE.WebGLRenderer({ antialias: true });
       renderer.setSize(width, height);
@@ -322,47 +661,43 @@ export default {
       controls.enableDamping = true;
       controls.dampingFactor = 0.05;
       controls.screenSpacePanning = true;
-      controls.minDistance = 10;
-      controls.maxDistance = 100;
+      controls.minDistance = 8;
+      controls.maxDistance = 80;
       controls.autoRotate = false;
-      controls.autoRotateSpeed = 0.5;
+      controls.autoRotateSpeed = 0.3;
       
-      const ambientLight = new THREE.AmbientLight(0xffffff, 0.2);
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
       scene.add(ambientLight);
       
-      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6);
       directionalLight.position.set(10, 20, 10);
       scene.add(directionalLight);
       
-      const pointLight1 = new THREE.PointLight(0x10b981, 0.3, 50);
-      pointLight1.position.set(-15, 0, 0);
+      const pointLight1 = new THREE.PointLight(0x6366f1, 0.4, 60);
+      pointLight1.position.set(-20, 0, -20);
       scene.add(pointLight1);
       
-      const pointLight2 = new THREE.PointLight(0xef4444, 0.3, 50);
-      pointLight2.position.set(15, 0, 0);
+      const pointLight2 = new THREE.PointLight(0x10b981, 0.3, 60);
+      pointLight2.position.set(20, 10, 10);
       scene.add(pointLight2);
       
-      const pointLight3 = new THREE.PointLight(0x6366f1, 0.2, 50);
-      pointLight3.position.set(0, 10, -15);
-      scene.add(pointLight3);
-      
       const starGeometry = new THREE.BufferGeometry();
-      const starCount = 2000;
+      const starCount = 3000;
       const positions = new Float32Array(starCount * 3);
       
       for (let i = 0; i < starCount * 3; i += 3) {
-        positions[i] = (Math.random() - 0.5) * 200;
-        positions[i + 1] = (Math.random() - 0.5) * 200;
-        positions[i + 2] = (Math.random() - 0.5) * 200;
+        positions[i] = (Math.random() - 0.5) * 300;
+        positions[i + 1] = (Math.random() - 0.5) * 300;
+        positions[i + 2] = (Math.random() - 0.5) * 300;
       }
       
       starGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
       
       const starMaterial = new THREE.PointsMaterial({
         color: 0xffffff,
-        size: 0.1,
+        size: 0.15,
         transparent: true,
-        opacity: 0.6
+        opacity: 0.7
       });
       
       const stars = new THREE.Points(starGeometry, starMaterial);
@@ -380,25 +715,38 @@ export default {
       animate();
     };
 
+    let lastTime = Date.now();
     const animate = () => {
       animationFrameId = requestAnimationFrame(animate);
       
-      nodeMeshes.forEach(mesh => {
-        const time = Date.now() * 0.001;
-        const originalPos = mesh.userData.originalPosition;
+      const now = Date.now();
+      const deltaTime = (now - lastTime) / 1000;
+      lastTime = now;
+      
+      if (!isDragging && nodeMeshes.length > 0) {
+        updatePhysics(nodeMeshes, window.similarityMatrix || {}, deltaTime);
         
-        mesh.position.x += Math.sin(time + mesh.position.x * 0.1) * 0.001;
-        mesh.position.y += Math.cos(time + mesh.position.y * 0.1) * 0.001;
-        mesh.position.z += Math.sin(time * 0.7 + mesh.position.z * 0.1) * 0.001;
+        if (showConnections.value) {
+          updateConnectionLines();
+        }
+        if (showLabels.value) {
+          updateLabels();
+        }
+      }
+      
+      nodeMeshes.forEach(mesh => {
+        const time = now * 0.001;
+        const floatY = Math.sin(time + mesh.userData.diaryId * 0.5) * 0.002;
+        mesh.position.y += floatY;
         
         if (mesh.material) {
-          const pulseIntensity = 0.95 + Math.sin(time * 2) * 0.05;
+          const pulseIntensity = 0.98 + Math.sin(time * 1.5 + mesh.userData.diaryId) * 0.02;
           mesh.scale.setScalar(pulseIntensity);
         }
         
         if (mesh.children && mesh.children[0]) {
-          const glowIntensity = 0.8 + Math.sin(time * 1.5) * 0.2;
-          mesh.children[0].material.opacity = 0.08 * glowIntensity;
+          const glowIntensity = 0.8 + Math.sin(time * 2) * 0.2;
+          mesh.children[0].material.opacity = 0.12 * glowIntensity;
         }
       });
       
@@ -406,11 +754,7 @@ export default {
         controls.update();
       }
       
-      if (autoRotate.value) {
-        controls.autoRotate = true;
-      } else {
-        controls.autoRotate = false;
-      }
+      controls.autoRotate = autoRotate.value;
       
       renderer.render(scene, camera);
     };
@@ -426,11 +770,15 @@ export default {
       const intersects = raycaster.intersectObjects(nodeMeshes, true);
       
       if (intersects.length > 0) {
-        const mesh = intersects[0].object;
-        const targetMesh = mesh.type === 'Mesh' ? mesh : mesh.parent;
+        let mesh = intersects[0].object;
+        while (mesh.parent && mesh.parent !== scene && mesh.parent.type !== 'Scene') {
+          mesh = mesh.parent;
+        }
         
-        if (targetMesh.userData && targetMesh.userData.diary) {
-          selectedNode.value = { ...targetMesh.userData.diary };
+        if (mesh.userData && mesh.userData.diary) {
+          const diary = mesh.userData.diary;
+          selectedNode.value = { ...diary };
+          similarToSelected.value = findSimilarNotes(diary.id);
           
           nodeMeshes.forEach(m => {
             if (m.material) {
@@ -438,12 +786,13 @@ export default {
             }
           });
           
-          if (targetMesh.material) {
-            targetMesh.material.emissiveIntensity = 0.5;
+          if (mesh.material) {
+            mesh.material.emissiveIntensity = 0.6;
           }
         }
       } else {
         selectedNode.value = null;
+        similarToSelected.value = [];
         nodeMeshes.forEach(m => {
           if (m.material) {
             m.material.emissiveIntensity = 0.1;
@@ -459,27 +808,17 @@ export default {
       
       if (isDragging && draggedNode) {
         raycaster.setFromCamera(mouse, camera);
-        const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+        
+        const planeNormal = camera.getWorldDirection(new THREE.Vector3()).negate();
+        const plane = new THREE.Plane(planeNormal, 0);
+        plane.constant = -planeNormal.dot(camera.position) - 5;
+        
         const intersectPoint = new THREE.Vector3();
         raycaster.ray.intersectPlane(plane, intersectPoint);
         
         if (intersectPoint) {
-          const screenFactor = camera.position.z / 25;
-          const offsetX = (mouse.x - mouse.startX) * screenFactor * 10;
-          const offsetY = (mouse.y - mouse.startY) * screenFactor * 10;
-          
-          draggedNode.position.x = draggedNode.userData.originalPosition.x + offsetX;
-          draggedNode.position.y = draggedNode.userData.originalPosition.y + offsetY;
-        }
-        
-        if (showLabels.value) {
-          const label = labelSprites.find(l => 
-            l.userData.diaryId === draggedNode.userData.diary.id
-          );
-          if (label) {
-            label.position.copy(draggedNode.position);
-            label.position.y += 1.5;
-          }
+          draggedNode.position.copy(intersectPoint);
+          draggedNode.userData.velocity.set(0, 0, 0);
         }
       }
       
@@ -492,16 +831,14 @@ export default {
         if (showLabels.value) {
           labelSprites.forEach(label => {
             const isHovered = intersects.some(intersect => {
-              const targetMesh = intersect.object.type === 'Mesh' ? intersect.object : intersect.object.parent;
-              return targetMesh.userData && targetMesh.userData.diary && 
-                     targetMesh.userData.diary.id === label.userData.diaryId;
+              let targetMesh = intersect.object;
+              while (targetMesh.parent && targetMesh.parent !== scene) {
+                targetMesh = targetMesh.parent;
+              }
+              return targetMesh.userData && targetMesh.userData.diaryId === label.userData.diaryId;
             });
             
-            if (isHovered) {
-              label.material.opacity = 0.9;
-            } else {
-              label.material.opacity = 0.1;
-            }
+            label.material.opacity = isHovered ? 0.9 : 0.1;
           });
         }
       }
@@ -519,15 +856,22 @@ export default {
       
       if (intersects.length > 0) {
         isDragging = true;
-        const mesh = intersects[0].object;
-        draggedNode = mesh.type === 'Mesh' ? mesh : mesh.parent;
+        let mesh = intersects[0].object;
+        while (mesh.parent && mesh.parent !== scene && mesh.parent.type !== 'Scene') {
+          mesh = mesh.parent;
+        }
+        draggedNode = mesh;
         controls.enabled = false;
+        physicsEnabled = false;
       }
     };
 
     const onMouseUp = () => {
       if (isDragging && draggedNode) {
-        draggedNode.userData.originalPosition.copy(draggedNode.position);
+        draggedNode.userData.velocity.set(0, 0, 0);
+        setTimeout(() => {
+          physicsEnabled = true;
+        }, 100);
       }
       isDragging = false;
       draggedNode = null;
@@ -547,7 +891,7 @@ export default {
     };
 
     const resetCamera = () => {
-      camera.position.set(0, 0, 30);
+      camera.position.set(0, 0, 35);
       camera.lookAt(0, 0, 0);
       controls.reset();
     };
@@ -556,10 +900,19 @@ export default {
       autoRotate.value = !autoRotate.value;
     };
 
+    const reclustering = () => {
+      if (props.diaries && props.diaries.length > 0) {
+        nextTick(() => {
+          updateNodes(props.diaries);
+        });
+      }
+    };
+
     const reviewNode = () => {
       if (selectedNode.value) {
         emit('review', selectedNode.value.id);
         selectedNode.value = null;
+        similarToSelected.value = [];
       }
     };
 
@@ -591,9 +944,16 @@ export default {
     const updateNodes = (diaries) => {
       clearScene();
       
-      if (!scene) return;
+      if (!scene || !diaries || diaries.length === 0) return;
       
-      const positions = generatePositions(diaries);
+      const { matrix, embeddings } = buildSimilarityMatrix(diaries);
+      window.similarityMatrix = matrix;
+      diaryEmbeddings = embeddings;
+      
+      const clusterCount = Math.min(3, Math.max(1, Math.floor(diaries.length / 5) + 1));
+      const clusteredDiaries = kMeansClustering(diaries, matrix, Math.max(1, clusterCount));
+      
+      const positions = generateInitialPositions(clusteredDiaries);
       
       positions.forEach(item => {
         const mesh = createNodeMesh(item.diary, item.position);
@@ -602,14 +962,13 @@ export default {
         
         if (showLabels.value) {
           const label = createLabelSprite(item.diary, item.position);
-          label.userData.diaryId = item.diary.id;
           scene.add(label);
           labelSprites.push(label);
         }
       });
       
       if (showConnections.value) {
-        connectionLines = createConnectionLines(positions);
+        connectionLines = createConnectionLines(nodeMeshes, matrix, 0.4);
         connectionLines.forEach(line => scene.add(line));
       }
     };
@@ -623,12 +982,8 @@ export default {
     }, { deep: true });
 
     watch(showConnections, (value) => {
-      if (value) {
-        const positions = nodeMeshes.map(mesh => ({
-          diary: mesh.userData.diary,
-          position: mesh.position
-        }));
-        connectionLines = createConnectionLines(positions);
+      if (value && window.similarityMatrix) {
+        connectionLines = createConnectionLines(nodeMeshes, window.similarityMatrix, 0.4);
         connectionLines.forEach(line => scene.add(line));
       } else {
         connectionLines.forEach(line => scene.remove(line));
@@ -640,7 +995,6 @@ export default {
       if (value) {
         nodeMeshes.forEach(mesh => {
           const label = createLabelSprite(mesh.userData.diary, mesh.position);
-          label.userData.diaryId = mesh.userData.diary.id;
           scene.add(label);
           labelSprites.push(label);
         });
@@ -688,11 +1042,15 @@ export default {
       autoRotate,
       showConnections,
       showLabels,
+      similarToSelected,
       getEmotionLabel,
       getDisplayScore,
+      getSimilarityClass,
       resetCamera,
       toggleAutoRotate,
-      reviewNode
+      reclustering,
+      reviewNode,
+      jumpToNode
     };
   }
 };
@@ -702,7 +1060,7 @@ export default {
 .space-view-container {
   position: relative;
   width: 100%;
-  height: 500px;
+  height: 550px;
   border-radius: 16px;
   overflow: hidden;
   background: #0a0a1a;
@@ -731,8 +1089,8 @@ export default {
 }
 
 .control-btn {
-  padding: 8px 12px;
-  background: rgba(15, 23, 42, 0.8);
+  padding: 8px 14px;
+  background: rgba(15, 23, 42, 0.85);
   border: 1px solid rgba(148, 163, 184, 0.3);
   border-radius: 8px;
   color: #e2e8f0;
@@ -743,12 +1101,12 @@ export default {
 }
 
 .control-btn:hover {
-  background: rgba(30, 41, 59, 0.9);
+  background: rgba(30, 41, 59, 0.95);
   border-color: rgba(148, 163, 184, 0.5);
 }
 
 .control-btn.active {
-  background: rgba(99, 102, 241, 0.3);
+  background: rgba(99, 102, 241, 0.35);
   border-color: rgba(99, 102, 241, 0.5);
   color: #818cf8;
 }
@@ -758,7 +1116,7 @@ export default {
   align-items: center;
   gap: 4px;
   padding: 6px 10px;
-  background: rgba(15, 23, 42, 0.8);
+  background: rgba(15, 23, 42, 0.85);
   border: 1px solid rgba(148, 163, 184, 0.2);
   border-radius: 6px;
   color: #94a3b8;
@@ -780,7 +1138,7 @@ export default {
   flex-direction: column;
   gap: 8px;
   padding: 12px;
-  background: rgba(15, 23, 42, 0.8);
+  background: rgba(15, 23, 42, 0.85);
   border: 1px solid rgba(148, 163, 184, 0.2);
   border-radius: 8px;
   backdrop-filter: blur(4px);
@@ -812,8 +1170,8 @@ export default {
 }
 
 .legend-dot.neutral {
-  background: #6b7280;
-  box-shadow: 0 0 6px rgba(107, 114, 128, 0.5);
+  background: #6366f1;
+  box-shadow: 0 0 6px rgba(99, 102, 241, 0.5);
 }
 
 .legend-brightness {
@@ -851,13 +1209,13 @@ export default {
   position: absolute;
   top: 16px;
   right: 16px;
-  width: 300px;
+  width: 320px;
   max-height: calc(100% - 32px);
   background: rgba(15, 23, 42, 0.95);
   border: 1px solid rgba(148, 163, 184, 0.3);
   border-radius: 12px;
   overflow: hidden;
-  backdrop-filter: blur(8px);
+  backdrop-filter: blur(12px);
   z-index: 20;
   display: flex;
   flex-direction: column;
@@ -925,6 +1283,80 @@ export default {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.similar-notes-section {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.similar-notes-header {
+  font-size: 13px;
+  font-weight: 500;
+  color: #94a3b8;
+  margin-bottom: 10px;
+}
+
+.similar-notes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.similar-note-item {
+  padding: 10px 12px;
+  background: rgba(30, 41, 59, 0.6);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: 1px solid transparent;
+}
+
+.similar-note-item:hover {
+  background: rgba(51, 65, 85, 0.8);
+  border-color: rgba(99, 102, 241, 0.3);
+}
+
+.similar-note-preview {
+  font-size: 12px;
+  color: #cbd5e1;
+  line-height: 1.5;
+  margin-bottom: 6px;
+}
+
+.similar-note-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.similar-note-date {
+  font-size: 11px;
+  color: #64748b;
+}
+
+.similarity-badge {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+}
+
+.similarity-badge.high {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+}
+
+.similarity-badge.medium {
+  background: rgba(99, 102, 241, 0.15);
+  color: #818cf8;
+}
+
+.similarity-badge.low {
+  background: rgba(107, 114, 128, 0.15);
+  color: #9ca3af;
 }
 
 .node-detail-footer {
