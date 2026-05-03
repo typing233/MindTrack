@@ -338,7 +338,11 @@ export default {
       selectedDiary.value = diary;
       
       if (diary && diary.id) {
-        diaryApi.updateAccess(diary.id).catch(err => {
+        diaryApi.updateAccess(diary.id).then(async (result) => {
+          if (result && result.success) {
+            await loadDiaries();
+          }
+        }).catch(err => {
           console.error('更新访问时间失败:', err);
         });
       }
